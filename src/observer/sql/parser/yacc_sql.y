@@ -178,6 +178,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <expression>          aggregate_expression
 %type <expression_list>     expression_list
 %type <expression_list>     group_by
+%type <expression>          group_by_expression
+%type <expression_list>     group_by_expression_list
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
 %type <sql_node>            calc_stmt
@@ -573,7 +575,13 @@ expression:
 
 aggregate_expression:
     ID LBRACE expression RBRACE {
+      // 用于解析 SUM(c1), COUNT(c1) 等
       $$ = create_aggregate_expression($1, $3, sql_string, &@$);
+    }
+    | ID LBRACE '*' RBRACE {
+      // 修正：为 '*' 创建一个真实的 StarExpr 对象作为子表达式
+      Expression* star_expr = new StarExpr();
+      $$ = create_aggregate_expression($1, star_expr, sql_string, &@$);
     }
     ;
 
@@ -701,7 +709,7 @@ group_by:
     {
       $$ = nullptr;
     }
-    | GROUP BY expression_list
+    | GROUP BY group_by_expression_list
     {
       // group by 的表达式范围与select查询值的表达式范围是不同的，比如group by不支持 *
       // 但是这里没有处理。
@@ -771,6 +779,61 @@ set_variable_stmt:
 opt_semicolon: /*empty*/
     | SEMICOLON
     ;
+
+// 为 GROUP BY 定义一个更严格的表达式，不允许使用 '*'
+group_by_expression:
+    expression '+' expression {
+      $$ = create_arithmetic_expression(ArithmeticExpr::Type::ADD, $1, $3, sql_string, &@$);
+    }
+    | expression '-' expression {
+      $$ = create_arithmetic_expression(ArithmeticExpr::Type::SUB, $1, $3, sql_string, &@$);
+    }
+    | expression '*' expression {
+      $$ = create_arithmetic_expression(ArithmeticExpr::Type::MUL, $1, $3, sql_string, &@$);
+    }
+    | expression '/' expression {
+      $$ = create_arithmetic_expression(ArithmeticExpr::Type::DIV, $1, $3, sql_string, &@$);
+    }
+    | LBRACE expression RBRACE {
+      $$ = $2;
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    | '-' expression %prec UMINUS {
+      $$ = create_arithmetic_expression(ArithmeticExpr::Type::NEGATIVE, $2, nullptr, sql_string, &@$);
+    }
+    // 注意：这里没有包含 '*' 规则
+    | value {
+      $$ = new ValueExpr(*$1);
+      $$->set_name(token_name(sql_string, &@$));
+      delete $1;
+    }
+    | rel_attr {
+      RelAttrSqlNode *node = $1;
+      $$ = new UnboundFieldExpr(node->relation_name, node->attribute_name);
+      $$->set_name(token_name(sql_string, &@$));
+      delete $1;
+    }
+    // GROUP BY 子句中不允许直接使用聚合函数
+    // | aggregate_expression { $$ = $1; }
+    ;
+
+group_by_expression_list:
+    group_by_expression
+    {
+      $$ = new vector<unique_ptr<Expression>>;
+      $$->emplace_back($1);
+    }
+    | group_by_expression COMMA group_by_expression_list
+    {
+      if ($3 != nullptr) {
+        $$ = $3;
+      } else {
+        $$ = new vector<unique_ptr<Expression>>;
+      }
+      $$->emplace($$->begin(), $1);
+    }
+    ;
+
 %%
 //_____________________________________________________________________
 extern void scan_string(const char *str, yyscan_t scanner);

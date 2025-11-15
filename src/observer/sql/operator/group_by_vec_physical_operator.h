@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/expr/aggregate_hash_table.h"
 #include "sql/operator/physical_operator.h"
+// #include "sql/expr/expression_iterator.h" // 不再需要这个头文件
 
 /**
  * @brief Group By 物理算子(vectorized)
@@ -20,15 +21,25 @@ See the Mulan PSL v2 for more details. */
 class GroupByVecPhysicalOperator : public PhysicalOperator
 {
 public:
-  GroupByVecPhysicalOperator(vector<unique_ptr<Expression>> &&group_by_exprs, vector<Expression *> &&expressions){};
+  // 构造函数
+  GroupByVecPhysicalOperator(vector<unique_ptr<Expression>> &&group_by_exprs,
+                             vector<Expression *> &&aggregations)
+      : group_by_exprs_(std::move(group_by_exprs)), aggregations_(std::move(aggregations))
+  {}
 
   virtual ~GroupByVecPhysicalOperator() = default;
 
   PhysicalOperatorType type() const override { return PhysicalOperatorType::GROUP_BY_VEC; }
 
-  RC open(Trx *trx) override { return RC::UNIMPLEMENTED; }
-  RC next(Chunk &chunk) override { return RC::UNIMPLEMENTED; }
-  RC close() override { return RC::UNIMPLEMENTED; }
+  RC open(Trx *trx) override;
+  RC next(Chunk &chunk) override;
+  RC close() override;
 
 private:
+  vector<unique_ptr<Expression>> group_by_exprs_;
+  vector<Expression *> aggregations_;
+
+  unique_ptr<AggregateHashTable> hash_table_;
+  unique_ptr<AggregateHashTable::Scanner> ht_scanner_;
+  bool opened_ = false;
 };
