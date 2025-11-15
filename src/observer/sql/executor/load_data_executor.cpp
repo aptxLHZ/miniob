@@ -22,6 +22,82 @@ See the Mulan PSL v2 for more details. */
 
 using namespace common;
 
+// 解析单行CSV，支持 enclosed_by 字符
+static void parse_csv_line(const string& line, char terminated, char enclosed, vector<string>& fields) {
+    fields.clear();
+    if (line.empty()) {
+        return;
+    }
+
+    stringstream ss;
+    bool in_quotes = false;
+    for (size_t i = 0; i < line.length(); ++i) {
+        char c = line[i];
+        if (c == enclosed) {
+            // 处理转义的引号，例如 "abc""def"
+            if (in_quotes && i + 1 < line.length() && line[i+1] == enclosed) {
+                ss << c;
+                i++; // 跳过下一个引号
+            } else {
+                in_quotes = !in_quotes;
+            }
+        } else if (c == terminated && !in_quotes) {
+            fields.push_back(ss.str());
+            ss.str("");
+            ss.clear();
+        } else {
+            ss << c;
+        }
+    }
+    fields.push_back(ss.str());
+}
+
+
+// 将字符串字段序列化到内存缓冲区
+static RC serialize_pax_record(const TableMeta& meta, const vector<string>& file_values, char* record_buffer) {
+    int current_offset = 0;
+    const int sys_field_num = meta.sys_field_num();
+    const int user_field_num = meta.field_num() - sys_field_num;
+
+    for (int i = 0; i < user_field_num; ++i) {
+        const FieldMeta *field_meta = meta.field(i + sys_field_num);
+        string value_str = file_values[i];
+        common::strip(value_str); // 去掉首尾空格
+
+        char* dest = record_buffer + current_offset;
+
+        try {
+            switch (field_meta->type()) {
+                case AttrType::INTS: {
+                    int val = value_str.empty() ? 0 : std::stoi(value_str);
+                    memcpy(dest, &val, sizeof(val));
+                    break;
+                }
+                case AttrType::FLOATS: {
+                    float val = value_str.empty() ? 0.0f : std::stof(value_str);
+                    memcpy(dest, &val, sizeof(val));
+                    break;
+                }
+                case AttrType::CHARS: {
+                    strncpy(dest, value_str.c_str(), field_meta->len());
+                    size_t copied_len = value_str.length();
+                    if (copied_len < (size_t)field_meta->len()) {
+                        memset(dest + copied_len, 0, field_meta->len() - copied_len);
+                    }
+                    break;
+                }
+                default:
+                    return RC::UNSUPPORTED;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to convert string '%s' for column %s. Error: %s", value_str.c_str(), field_meta->name(), e.what());
+            return RC::INVALID_ARGUMENT;
+        }
+        current_offset += field_meta->len();
+    }
+    return RC::SUCCESS;
+}
+
 RC LoadDataExecutor::execute(SQLStageEvent *sql_event)
 {
   RC            rc         = RC::SUCCESS;
@@ -85,65 +161,96 @@ RC insert_record_from_file(
 // TODO: pax format and row format
 void LoadDataExecutor::load_data(Table *table, const char *file_name, char terminated, char enclosed, SqlResult *sql_result)
 {
-  // your code here
   stringstream result_string;
 
   fstream fs;
-  fs.open(file_name, ios_base::in | ios_base::binary);
+  fs.open(file_name, ios_base::in); // 以文本模式打开文件
   if (!fs.is_open()) {
     result_string << "Failed to open file: " << file_name << ". system error=" << strerror(errno) << endl;
     sql_result->set_return_code(RC::FILE_NOT_EXIST);
     sql_result->set_state_string(result_string.str());
     return;
   }
+  
+  // 这里定义 meta 变量，后续代码就可以安全使用它
+  const TableMeta& meta = table->table_meta(); 
+  const int sys_field_num = meta.sys_field_num();
+  const int user_field_num = meta.field_num() - sys_field_num;
 
-  struct timespec begin_time;
-  clock_gettime(CLOCK_MONOTONIC, &begin_time);
-  const int sys_field_num = table->table_meta().sys_field_num();
-  const int field_num     = table->table_meta().field_num() - sys_field_num;
-
-  vector<Value>       record_values(field_num);
-  string              line;
+  string line;
   vector<string> file_values;
-  const string        delim("|");
-  int                      line_num        = 0;
-  int                      insertion_count = 0;
-  RC                       rc              = RC::SUCCESS;
-  while (!fs.eof() && RC::SUCCESS == rc) {
-    getline(fs, line);
+  int line_num = 0;
+  int insertion_count = 0;
+  RC rc = RC::SUCCESS;
+
+  while (getline(fs, line)) {
     line_num++;
     if (common::is_blank(line.c_str())) {
-      continue;
+        continue;
     }
+    
+    // 使用我们自己的解析函数，处理分隔符和包围符
+    parse_csv_line(line, terminated, enclosed, file_values);
 
-    file_values.clear();
-    common::split_string(line, delim, file_values);
-    stringstream errmsg;
-
-    if (table->table_meta().storage_format() == StorageFormat::ROW_FORMAT) {
-      rc = insert_record_from_file(table, file_values, record_values, errmsg);
-      if (rc != RC::SUCCESS) {
-        result_string << "Line:" << line_num << " insert record failed:" << errmsg.str() << ". error:" << strrc(rc)
-                      << endl;
+    if (meta.storage_format() == StorageFormat::ROW_FORMAT) {
+      // 保持已有的行存逻辑不变
+      vector<Value> record_values(user_field_num);
+      stringstream errmsg;
+      RC line_rc = insert_record_from_file(table, file_values, record_values, errmsg);
+      if (line_rc != RC::SUCCESS) {
+          result_string << "Line:" << line_num << " insert record failed:" << errmsg.str() << ". error:" << strrc(line_rc)
+                        << endl;
       } else {
-        insertion_count++;
+          insertion_count++;
       }
-    } else if (table->table_meta().storage_format() == StorageFormat::PAX_FORMAT) {
-      // your code here
-      // Todo: 参照insert_record_from_file实现
-      rc = RC::UNIMPLEMENTED;
+    } else if (meta.storage_format() == StorageFormat::PAX_FORMAT) {
+      // PAX 格式的导入逻辑
+      if (file_values.size() != (size_t)user_field_num) {
+          result_string << "Line:" << line_num << " field count mismatch. Expected " << user_field_num << ", but got " << file_values.size() << ". Skipping line." << endl;
+          continue; // 字段数量不匹配，跳过此行
+      }
+
+      // 计算用户字段占用的总记录大小
+      int user_record_size = 0;
+      for (int i = 0; i < user_field_num; ++i) {
+          user_record_size += meta.field(i + sys_field_num)->len();
+      }
+      
+      // 使用 alloca 在栈上分配缓冲区，避免堆分配的开销和忘记释放的问题
+      char* record_buffer = (char*)alloca(user_record_size);
+
+      // 1. 将字符串字段序列化到 record_buffer
+      RC line_rc = serialize_pax_record(meta, file_values, record_buffer);
+      if (line_rc != RC::SUCCESS) {
+          result_string << "Line:" << line_num << " serialize failed. error:" << strrc(line_rc) << ". Skipping line." << endl;
+          continue;
+      }
+      
+      // 2. 构造 Record 对象并插入
+      Record record;
+      record.set_data(record_buffer, user_record_size); 
+      line_rc = table->insert_record(record);
+
+      if (line_rc != RC::SUCCESS) {
+          result_string << "Line:" << line_num << " insert record failed. error:" << strrc(line_rc) << ". Skipping line." << endl;
+          continue;
+      } else {
+          insertion_count++;
+      }
     } else {
       rc = RC::UNSUPPORTED;
       result_string << "Unsupported storage format: " << strrc(rc) << endl;
+      break; // 不支持的格式，直接退出循环
     }
   }
-  fs.close();
 
-  struct timespec end_time;
-  clock_gettime(CLOCK_MONOTONIC, &end_time);
-  if (RC::SUCCESS == rc) {
-    result_string << strrc(rc);
+  fs.close();
+  
+  if (rc == RC::SUCCESS) {
+    result_string << insertion_count << " rows affected.";
   }
-  LOG_INFO("load data done. row num: %s, result: %s", insertion_count, strrc(rc));
-  sql_result->set_return_code(RC::SUCCESS);
+  
+  LOG_INFO("load data done. row num: %d, final result: %s", insertion_count, strrc(rc));
+  sql_result->set_return_code(rc);
+  sql_result->set_state_string(result_string.str());
 }
