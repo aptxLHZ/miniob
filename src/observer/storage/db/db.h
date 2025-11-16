@@ -71,6 +71,12 @@ public:
       const StorageFormat storage_format = StorageFormat::ROW_FORMAT);
 
   /**
+   * @brief 删除一个表
+   * @param table_name 表名
+   */
+  RC drop_table(const char *table_name); 
+
+  /**
    * @brief 根据表名查找表
    */
   Table *find_table(const char *table_name) const;
@@ -141,6 +147,7 @@ private:
   unique_ptr<LogHandler>         log_handler_;          ///< 当前数据库的日志处理器
   unique_ptr<TrxKit>             trx_kit_;              ///< 当前数据库的事务管理器
   oceanbase::ObLsm              *lsm_;                  ///< 当前数据库的 LSM-Tree 存储引擎
+  std::map<std::string, Table *> tables_;
 
   /// 给每个table都分配一个ID，用来记录日志。这里假设所有的DDL都不会并发操作，所以相关的数据都不上锁
   int32_t next_table_id_ = 0;

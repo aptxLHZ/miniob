@@ -267,6 +267,62 @@ RC HeapTableEngine::sync()
   return rc;
 }
 
+RC HeapTableEngine::drop()
+{
+  RC rc = RC::SUCCESS;
+  const char *name = table_meta_->name();
+  string base_path = db_->path();
+
+  // 1. 删除所有索引文件 (.index)
+  for (Index *index : indexes_) {
+    // Index::drop() 负责删除索引文件
+    rc = index->drop(); 
+    if (OB_FAIL(rc)) {
+      LOG_WARN("Failed to drop index %s for table %s. rc=%s", index->index_meta().name(), name, strrc(rc));
+      // 继续尝试删除其他文件，但不返回成功
+    }
+  }
+
+  // 2. 关闭并删除表数据文件 (.data)
+  if (data_buffer_pool_ != nullptr) {
+    // 强制关闭文件句柄
+    data_buffer_pool_->close_file(); 
+    
+    // 构造数据文件的完整路径
+    string data_file_path = table_data_file(base_path.c_str(), name);
+    
+    // 使用 C 标准库的 remove() 函数删除文件
+    if (0 != ::remove(data_file_path.c_str())) {
+      if (errno != ENOENT) {
+        LOG_ERROR("Failed to remove table data file %s. errno=%d:%s", data_file_path.c_str(), errno, strerror(errno));
+        return RC::IOERR_WRITE;
+      }
+      // 如果文件不存在，可以接受
+    }
+    
+    // 3. 释放 RecordFileHandler 和 DiskBufferPool 相关的内存
+    delete record_handler_;
+    record_handler_ = nullptr;
+    
+    // DiskBufferPool 已经通过 close_file() 清理了资源，此处只需清空指针（或依赖析构函数）
+    // 注意：data_buffer_pool_ 是从 Db::buffer_pool_manager 借来的，不需要 delete，
+    // 但在 HeapTableEngine 析构函数中它是被关闭 (close_file) 和清空 (nullptr) 的。
+    // 在 drop 之后，为了避免二次释放或悬空指针，我们应该遵循析构函数的清理流程。
+    // 由于我们在 drop() 之后紧接着会在 Table::~Table() 中释放 engine_ (即 HeapTableEngine)
+    // 这里的清理已经足够，但我们**不**需要 delete data_buffer_pool_。
+    // 由于你提供的代码中 `data_buffer_pool_` 是一个裸指针成员，且在析构函数中被置为 `nullptr`
+    // 但它很可能是通过 `bpm.open_file` 获得的指针，**不应在此处 delete**，我们只需要删除 `record_handler_` 并清空指针。
+    data_buffer_pool_ = nullptr; 
+  }
+
+
+  // 4. 清理内存中的索引对象（由析构函数完成，但在此处可以提前清理以防万一）
+  // 为了简化且依赖于 HeapTableEngine 的析构函数，此处不再重复清理 indexes_ 容器中的 Index* 对象。
+
+  LOG_INFO("Successfully dropped heap table engine files: %s", name);
+  return rc;
+}
+
 Index *HeapTableEngine::find_index(const char *index_name) const
 {
   for (Index *index : indexes_) {

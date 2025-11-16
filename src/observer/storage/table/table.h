@@ -119,6 +119,8 @@ public:
 
   LobFileHandler *lob_handler() const { return lob_handler_; }
 
+  RC drop();
+
   RC sync();
 
 private:

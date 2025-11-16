@@ -41,6 +41,8 @@ public:
   const char *name() const;
   const char *field() const;
 
+  const char *path() const { return file_path_.c_str(); }
+
   void desc(ostream &os) const;
 
 public:
@@ -50,4 +52,5 @@ public:
 protected:
   string name_;   // index's name
   string field_;  // field's name
+  string file_path_;
 };

@@ -293,6 +293,49 @@ Index *Table::find_index_by_field(const char *field_name) const
   return engine_->find_index_by_field(field_name);
 }
 
+RC Table::drop()
+{
+  RC rc = RC::SUCCESS;
+  const char *name = table_meta_.name();
+  
+  // 1. 通知底层的存储引擎删除所有数据文件和索引文件
+  rc = engine_->drop(); 
+  if (OB_FAIL(rc)) {
+    LOG_ERROR("Failed to drop engine files for table %s. rc=%s", name, strrc(rc));
+    return rc;
+  }
+
+  // 2. 删除表的元数据文件 (*.table)
+  // 需要使用 db_->path() 和 table_meta_.name() 构造文件路径
+  string meta_file_path = table_meta_file(db_->path().c_str(), name);
+  
+  // 使用 C 标准库的 remove() 函数删除文件
+  if (0 != ::remove(meta_file_path.c_str())) {
+    // 检查是否是因为文件不存在而失败 (ENOENT: No such file or directory)
+    if (errno != ENOENT) {
+      LOG_ERROR("Failed to remove table meta file %s. errno=%d:%s", meta_file_path.c_str(), errno, strerror(errno));
+      return RC::IOERR_WRITE;
+    }
+    // 如果文件不存在，可以认为删除成功 (幂等性)
+  }
+
+  // 3. 释放 engine 资源
+  engine_.reset();
+
+  // LobHandler 的清理将在 Table 的析构函数中处理 (~Table())
+  if (lob_handler_ != nullptr) {
+    // LobHandler 也需要调用其 drop/remove 方法来清理 LOB 数据文件
+    rc = lob_handler_->remove_file();
+    if (OB_FAIL(rc)) {
+      LOG_WARN("Failed to remove LOB file for table %s. rc=%s", name, strrc(rc));
+      // 这里的失败通常不致命，但最好报告
+    }
+  }
+
+  LOG_INFO("Successfully dropped table %s and its meta file.", name);
+  return RC::SUCCESS;
+}
+
 RC Table::sync()
 {
   return engine_->sync();

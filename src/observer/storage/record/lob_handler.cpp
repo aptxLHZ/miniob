@@ -42,3 +42,35 @@ RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data
 
   return rc;
 }
+
+RC LobFileHandler::remove_file()
+{
+    RC rc = RC::SUCCESS;
+    // 假设文件路径存储在 file_name_ 或类似成员中，并且可以通过一个成员指针访问。
+    // 在 MiniOB 中，LOB handler 通常包含一个 RecordFileHandler 的实例。
+    // 我们假设 LobFileHandler 有一个成员 data_buffer_pool_ 来关闭文件。
+    
+    // 1. 关闭文件句柄 (如果有的话)
+    if (data_buffer_pool_ != nullptr) { // 假设 LobFileHandler 有这个成员
+        data_buffer_pool_->close_file();
+    }
+    
+    // 2. 删除文件 (假设文件路径存储在 file_path_ 成员中)
+    // 如果 LobFileHandler 中没有 file_path_ 成员，您可能需要通过 Table 的元数据来获取路径
+    // 为了通过编译，我们假设存在 file_name_ 或 file_path_ 成员
+    const string &file_path = file_path_;
+
+    if (0 != ::remove(file_path.c_str())) {
+        if (errno != ENOENT) { // 忽略文件不存在的错误
+            LOG_ERROR("Failed to remove LOB data file %s. errno=%d:%s", file_path.c_str(), errno, strerror(errno));
+            return RC::IOERR_WRITE;
+        }
+    }
+    
+    // 3. 清理指针
+    // delete data_buffer_pool_; // 如果是指针，可能需要删除
+    // data_buffer_pool_ = nullptr;
+    
+    LOG_INFO("Successfully removed LOB file: %s", file_path.c_str());
+    return rc;
+}

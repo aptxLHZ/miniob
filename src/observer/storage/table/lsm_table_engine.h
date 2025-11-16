@@ -49,7 +49,8 @@ public:
   Index *find_index_by_field(const char *field_name) const override { return nullptr; }
   RC     open() override;
   RC     init() override { return RC::UNIMPLEMENTED; }
-
+  RC drop() override;
+  
 private:
   Db              *db_;
   Table           *table_;

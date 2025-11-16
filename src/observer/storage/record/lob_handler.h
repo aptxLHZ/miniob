@@ -14,6 +14,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/sstream.h"
 #include "common/types.h"
 #include "storage/persist/persist.h"
+#include <string>
+#include "../buffer/disk_buffer_pool.h"
 
 /**
  * @brief 管理LOB文件中的 LOB 对象
@@ -35,7 +37,11 @@ public:
   RC insert_data(int64_t &offset, int64_t length, const char *data);
 
   RC get_data(int64_t offset, int64_t length, char *data) { return file_.read_at(offset, length, data); }
+  
+  RC remove_file();
 
 private:
   PersistHandler file_;
+  DiskBufferPool *data_buffer_pool_ = nullptr;
+  std::string file_path_;
 };

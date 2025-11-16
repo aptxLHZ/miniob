@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/types.h"
 #include "common/lang/string.h"
+#include "common/sys/rc.h"
 
 class Trx;
 class Db;
@@ -43,6 +44,7 @@ public:
 
   const char *get_current_db_name() const;
   Db         *get_current_db() const;
+  RC         commit();
 
   /**
    * @brief 设置当前会话关联的数据库

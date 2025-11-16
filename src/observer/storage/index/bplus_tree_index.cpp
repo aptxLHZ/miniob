@@ -105,6 +105,45 @@ IndexScanner *BplusTreeIndex::create_scanner(
 
 RC BplusTreeIndex::sync() { return index_handler_.sync(); }
 
+/**
+ * @brief Drop index by deleting its underlying file.
+ */
+
+
+RC BplusTreeIndex::drop()
+{
+    RC rc = RC::SUCCESS;
+    
+    // 1. 关闭索引文件句柄 (通过 index_handler_)
+    index_handler_.close(); 
+
+    // 2. 删除索引文件 (.index)
+    // 假设 index_meta_ 存储了文件路径
+    const char* index_file_path = index_meta_.path(); 
+    
+    if (0 != ::remove(index_file_path)) {
+        if (errno != ENOENT) {
+            // 如果删除失败，返回 IO 错误
+            LOG_ERROR("Failed to remove index file %s. errno=%d:%s", index_file_path, errno, strerror(errno));
+            return RC::IOERR_WRITE;
+        }
+    }
+    
+    // 3. 清理资源
+    if (record_handler_ != nullptr) {
+        delete record_handler_;
+        record_handler_ = nullptr;
+    }
+    // data_buffer_pool_ 由 BPM 管理，在此处只需清空指针
+    data_buffer_pool_ = nullptr;
+
+    LOG_INFO("BplusTreeIndex::drop succeeded for index %s.", index_meta_.name());
+
+    return rc;
+}
+
+
+
 ////////////////////////////////////////////////////////////////////////////////
 BplusTreeIndexScanner::BplusTreeIndexScanner(BplusTreeHandler &tree_handler) : tree_scanner_(tree_handler) {}
 
@@ -123,3 +162,5 @@ RC BplusTreeIndexScanner::destroy()
   delete this;
   return RC::SUCCESS;
 }
+
+

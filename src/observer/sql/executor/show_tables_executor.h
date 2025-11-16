@@ -35,6 +35,8 @@ public:
 
   RC execute(SQLStageEvent *sql_event)
   {
+    fprintf(stderr, "DEBUG_SHOW: Entering ShowTablesExecutor::execute\n");
+    
     SqlResult    *sql_result    = sql_event->session_event()->sql_result();
     SessionEvent *session_event = sql_event->session_event();
 

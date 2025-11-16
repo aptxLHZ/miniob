@@ -27,6 +27,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/trx/trx.h"
 #include "storage/clog/disk_log_handler.h"
 #include "storage/clog/integrated_log_replayer.h"
+#include "stdio.h"
 
 using namespace common;
 
@@ -176,6 +177,50 @@ RC Db::create_table(const char *table_name, span<const AttrInfoSqlNode> attribut
   return RC::SUCCESS;
 }
 
+RC Db::drop_table(const char *table_name)
+{
+    // 🎯 DEBUG LOG: Db 层入口点
+    fprintf(stderr, "DEBUG_DROP: Entering Db::drop_table for table %s\n", table_name);
+    RC rc = RC::SUCCESS;
+
+    // 1. 查找表对象
+    auto it = tables_.find(table_name);
+    if (it == tables_.end()) {
+        LOG_WARN("Table to drop not found: %s", table_name);
+        fprintf(stderr, "DEBUG_DROP: Table %s not found in catalog\n", table_name);
+        return RC::SCHEMA_TABLE_NOT_EXIST; 
+    }
+    Table *table = it->second;
+
+    // 2. 调用 Table::drop() 清理磁盘文件
+    fprintf(stderr, "DEBUG_DROP: Calling table->drop() for %s\n", table_name);
+    rc = table->drop();
+    
+    // 🎯 调试点：检查 Table::drop 的实际返回码
+    if (OB_FAIL(rc)) {
+        LOG_ERROR("Table::drop() failed for table %s. Actual RC: %s", table_name, strrc(rc)); 
+        // 🎯 临时使用 printf 强制输出错误码
+        fprintf(stderr,"DB_DROP_FAILED: table=%s, rc=%d\n", table_name, (int)rc);
+        // 🚨 如果失败，客户端会返回 FAILURE
+        return rc;
+    }
+
+    // 3. 成功后，更新数据库目录（移除表指针和内存）
+    
+    // 3a. 释放 Table 对象内存
+    fprintf(stderr, "DEBUG_DROP: Deleting table object %s\n", table_name);
+    delete table; 
+    table = nullptr;
+
+    // 3b. 从 Db 内部的 map 中移除该表记录
+    fprintf(stderr, "DEBUG_DROP: Erasing table %s from tables_ map\n", table_name);
+    tables_.erase(it);
+
+    LOG_INFO("Successfully dropped table %s and removed from catalog.", table_name);
+    // 🎯 最终确认点
+    fprintf(stderr, "DEBUG_DROP: Db::drop_table finished successfully\n");
+    return RC::SUCCESS;
+}
 Table *Db::find_table(const char *table_name) const
 {
   unordered_map<string, Table *>::const_iterator iter = opened_tables_.find(table_name);
@@ -238,6 +283,7 @@ const char *Db::name() const { return name_.c_str(); }
 
 void Db::all_tables(vector<string> &table_names) const
 {
+  fprintf(stderr, "DEBUG_SHOW: Entering Db::all_tables\n");
   for (const auto &table_item : opened_tables_) {
     table_names.emplace_back(table_item.first);
   }

@@ -42,9 +42,13 @@ public:
 
   RC sync() override;
 
+  RC drop() override;
+
 private:
   bool             inited_ = false;
   Table           *table_  = nullptr;
+  DiskBufferPool    *data_buffer_pool_ = nullptr;
+  RecordFileHandler *record_handler_   = nullptr;
   BplusTreeHandler index_handler_;
 };
 
